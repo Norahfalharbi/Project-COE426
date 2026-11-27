@@ -1,12 +1,3 @@
-"""Prepare and encrypt one day of household electricity readings.
-
-Run from VS Code's terminal with:
-    python meter.py
-
-By default, the dataset must be named ``household_power_consumption.txt``
-and placed in the same folder as this script.
-"""
-
 from argparse import ArgumentParser
 from pathlib import Path
 from time import perf_counter

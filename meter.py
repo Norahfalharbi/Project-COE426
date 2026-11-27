@@ -1,4 +1,5 @@
 from argparse import ArgumentParser
+import json
 from pathlib import Path
 from time import perf_counter
 
@@ -7,6 +8,9 @@ from phe import paillier
 
 
 DEFAULT_DATASET = Path(__file__).with_name("household_power_consumption.txt")
+DEFAULT_REQUEST = Path(__file__).with_name("request.json")
+DEFAULT_PRIVATE_KEY = Path(__file__).with_name("private_key.json")
+DEFAULT_RATE = 20  
 
 
 def load_dataset(file_path):
@@ -41,7 +45,6 @@ def prepare_meter_data(data):
     )
     meter_data = meter_data.dropna(subset=["Global_active_power"])
 
-    # Global_active_power is the average kW during one minute.
     meter_data["Energy_Wh"] = meter_data["Global_active_power"] * (1000 / 60)
 
     return meter_data[["Datetime", "Global_active_power", "Energy_Wh"]]
@@ -120,6 +123,54 @@ def encrypt_readings(readings, public_key):
     return [public_key.encrypt(reading) for reading in readings]
 
 
+def save_meter_outputs(
+    meter_result,
+    rate_halala_per_kwh=DEFAULT_RATE,
+    request_path=DEFAULT_REQUEST,
+    private_key_path=DEFAULT_PRIVATE_KEY,
+):
+    """Create the encrypted request for the cloud and keep the private key local."""
+    hourly_data = meter_result["hourly_data"]
+    encrypted_readings = meter_result["encrypted_readings"]
+    public_key = meter_result["public_key"]
+    private_key = meter_result["private_key"]
+
+    encrypted_rows = []
+    for row, encrypted_value in zip(
+        hourly_data.itertuples(index=False), encrypted_readings
+    ):
+        encrypted_rows.append(
+            {
+                "timestamp": row.Datetime.strftime("%Y-%m-%d %H:%M"),
+                "ciphertext": str(encrypted_value.ciphertext(False)),
+                "exponent": encrypted_value.exponent,
+            }
+        )
+
+    request_data = {
+        "dataset": "UCI Individual Household Electric Power Consumption",
+        "selected_date": str(meter_result["selected_date"]),
+        "unit": "Wh",
+        "rate_halala_per_kwh": rate_halala_per_kwh,
+        "public_key": {"n": str(public_key.n)},
+        "readings": encrypted_rows,
+    }
+
+    private_key_data = {
+        "n": str(public_key.n),
+        "p": str(private_key.p),
+        "q": str(private_key.q),
+    }
+
+    with Path(request_path).open("w", encoding="utf-8") as file:
+        json.dump(request_data, file, indent=4)
+
+    with Path(private_key_path).open("w", encoding="utf-8") as file:
+        json.dump(private_key_data, file, indent=4)
+
+    return request_data
+
+
 def run_meter(data_file, selected_date=None):
     """Run the complete smart-meter preparation and encryption workflow."""
     data = load_dataset(data_file)
@@ -145,7 +196,6 @@ def run_meter(data_file, selected_date=None):
     print(f"Encryption time: {encryption_time:.4f} seconds")
     print("Encryption completed successfully.")
 
-    # The private key stays with the authorized party; never send it to the cloud.
     return {
         "selected_date": selected_date,
         "hourly_data": hourly_data,
@@ -170,12 +220,21 @@ def parse_arguments():
         "--date",
         help="Optional complete date in YYYY-MM-DD format",
     )
+    parser.add_argument(
+        "--rate",
+        type=int,
+        default=DEFAULT_RATE,
+        help="Electricity rate in halalas per kWh",
+    )
     return parser.parse_args()
 
 
 def main():
     args = parse_arguments()
-    run_meter(args.data_file, args.date)
+    meter_result = run_meter(args.data_file, args.date)
+    save_meter_outputs(meter_result, args.rate)
+    print("request.json created successfully.")
+    print("private_key.json created locally.")
 
 
 if __name__ == "__main__":
